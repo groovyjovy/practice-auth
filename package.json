@@ -1,0 +1,14 @@
+{
+  "name": "practice-auth",
+  "private": true,
+  "packageManager": "pnpm@10.17.1",
+  "scripts": {
+    "fmt": "oxfmt apps packages",
+    "fmt:check": "oxfmt --check apps packages",
+    "lint": "oxlint"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.72.0",
+    "oxlint": "^1.87.0"
+  }
+}

@@ -1,0 +1,6 @@
+packages:
+  - apps/*
+  - packages/*
+
+# 公開から 7 日(10080 分)経っていないバージョンはインストールしない
+minimumReleaseAge: 10080
