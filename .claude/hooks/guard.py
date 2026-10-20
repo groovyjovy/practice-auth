@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""学習用リポジトリで Claude がコードを書いたり環境構築を代行したりしないようにするガード。
+"""学習用リポジトリで Claude が学習対象のコードを書かないようにするガード。
 
 PreToolUse フックとして動き、違反するツール呼び出しを deny する。
+環境構築は本筋ではないので、設定ファイルの編集やパッケージ管理コマンドは許可している。
 """
 import json
 import os
@@ -12,19 +13,14 @@ PROJECT = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
 
 # Claude が書いてよいパス(プロジェクトルートからの相対)
 ALLOWED_FILES = {"PROGRESS.md", "CLAUDE.md"}
-ALLOWED_DIRS = ("attacks/", "reviews/", ".claude/")
+ALLOWED_DIRS = ("attacks/", "reviews/", "tools/", ".claude/")
+# 設定ファイルはどのディレクトリにあっても書いてよい
+ALLOWED_BASENAMES = re.compile(
+    r"^(package\.json|tsconfig(\..+)?\.json|pnpm-workspace\.yaml|\.gitignore|\.gitkeep|mise\.toml)$"
+)
 
-# Claude に実行させない環境構築系コマンド
+# Claude に実行させないコマンド
 BLOCKED_COMMANDS = [
-    r"\bpnpm\s+(add|install|i|init|create|dlx|import|up|update|remove|rm)\b",
-    r"\bnpm\s+(install|i|init|create|ci|uninstall)\b",
-    r"\byarn\s+(add|install|init|create)\b",
-    r"\bbun\s+(add|install|init|create)\b",
-    r"\bnpx\b",
-    r"\bcorepack\b",
-    r"\bbrew\s+install\b",
-    r"\b(mise|nvm|volta|fnm|asdf)\s+(install|use)\b",
-    r"\btsc\s+--init\b",
     r"/etc/hosts",
 ]
 
@@ -47,7 +43,11 @@ def is_allowed_path(path: str) -> bool:
         # プロジェクト外(scratchpad やメモリなど)は対象外
         return True
     rel = os.path.relpath(abs_path, root)
-    return rel in ALLOWED_FILES or rel.startswith(ALLOWED_DIRS)
+    return (
+        rel in ALLOWED_FILES
+        or rel.startswith(ALLOWED_DIRS)
+        or bool(ALLOWED_BASENAMES.match(os.path.basename(rel)))
+    )
 
 
 def main() -> None:
@@ -67,10 +67,7 @@ def main() -> None:
         command = tool_input.get("command", "")
         for pattern in BLOCKED_COMMANDS:
             if re.search(pattern, command):
-                deny(
-                    "環境構築は本人が行います(CLAUDE.md 参照)。"
-                    "コマンドを実行せず、何を調べればよいか・どのドキュメントを見ればよいかを示してください。"
-                )
+                deny("hosts ファイルは本人が編集します(CLAUDE.md 参照)。追加する行を示してください。")
 
 
 if __name__ == "__main__":
