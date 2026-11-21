@@ -1,11 +1,12 @@
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { getCookie } from "hono/cookie";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { scrypt } from "node:crypto";
 
 const app = new Hono();
 const map: Map<string, string> = new Map();
-const sessionMap: Map<string, { userName: string, expireAt: number }> = new Map();
+const sessionMap: Map<string, { userName: string, expireAt: number, lastAccessAt: number }> = new Map();
 
 // for hashing
 const n = 17;
@@ -16,9 +17,16 @@ const maxmem = 256 * 1024 * 1024;
 const cost = 2 ** n;
 const faleSalt = Buffer.from("8d475c86a12e3fcedf758a200ab9e2a1", "hex");
 
-// 8 hour
+// Timeout
+// absolute time out is 8 hours.
 const ABSOLUTE_TIMEOUT_S  = 60 * 60 * 8
-const ABSOLUTE_TIMEOUT_MS  = ABSOLUTE_TIMEOUT_S * 10 ** 3;
+const ABSOLUTE_TIMEOUT_MS = ABSOLUTE_TIMEOUT_S * 10 ** 3;
+
+// idle time out is 30mintutes.
+const IDLE_TIMEOUT_S = 60 * 30;
+const IDLE_TIMEOUT_MS = IDLE_TIMEOUT_S * 10 ** 3;
+
+const cookieName = '__Host-session';
 
 const generateHash = async (password: string, salt: NonSharedBuffer, keyLen: number) => {
   return await new Promise<Buffer>((resolve, reject) => {
@@ -143,8 +151,9 @@ app.post("login", async (c) => {
     const sessionId = randomBytes(32).toString("hex");
     // 2. セッション用の Map に、セッション ID → { userName, expiresAt } を保存する
 
-    const expireAt = Date.now() + ABSOLUTE_TIMEOUT_MS;
-    sessionMap.set(sessionId, { userName: result.userName, expireAt });
+    const now = Date.now();
+    const expireAt = now + ABSOLUTE_TIMEOUT_MS;
+    sessionMap.set(sessionId, { userName: result.userName, expireAt, lastAccessAt: now });
     // 3. レスポンスに Set-Cookie ヘッダーを付ける
     // - __Host-session
     //   ブラウザが特別扱いするプレフィックス。Secure属性が必須、Path属性の値が"/"、Domain属性がついていない
@@ -158,7 +167,7 @@ app.post("login", async (c) => {
     //   Strict：他サイトからのリクエストには一切送らない
     //   Lax：他サイトからでも、リンクをクリックしたときのようなトップレベルのGET遷移では送る。フォームのPOST、fetch、iframe、画像などでは送らない
     //   None：常に送る（Secure が必須）
-    c.header("Set-Cookie", `__Host-session=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${ABSOLUTE_TIMEOUT_S}`)
+    c.header("Set-Cookie", `${cookieName}=${sessionId}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${ABSOLUTE_TIMEOUT_S}`)
 
     c.status(200);
     return c.text("logined!");
@@ -166,6 +175,41 @@ app.post("login", async (c) => {
     c.status(403);
     return c.text("Wrong password or username!");
   }
+});
+
+// 1. Cookie からセッション ID を取り出す
+//    - hono/cookie の getCookie を使うと簡単です。
+//    - Cookie が無ければ 401 を返します。
+// 2. sessionMap から引く: 見つからなければ 401 を返します。
+// 3. 絶対タイムアウトを確認する: 今の時刻が expireAt を過ぎていたら、セッションを Map から消してから 401 を返します。
+// 4. アイドルタイムアウトを確認する: 今の時刻から lastAccessAt を引いた時間が、アイドルタイムアウトを超えていたら、同じく消してから 401 を返します。
+// 5. lastAccessAt を今の時刻に更新する
+// 6. ユーザー名を返す（例：JSON で { userName }）
+app.get("me", async (c) => {
+  const sessionId = getCookie(c, cookieName);
+
+  if (!sessionId) {
+    return c.text("Session not found.", 401)
+  }
+
+  const session = sessionMap.get(sessionId);
+
+  if (!session) {
+    return c.text("Session not found.", 401)
+  }
+
+  const now = Date.now();
+
+  if (now > session.expireAt || (now - IDLE_TIMEOUT_MS) > session.lastAccessAt) {
+    sessionMap.delete(sessionId);
+    return c.text("Session not found.", 401)
+  }
+
+  const updated = { ...session, lastAccessAt: now }
+
+  sessionMap.set(sessionId, updated);
+
+  return c.text(session.userName, 200);
 });
 
 serve(
