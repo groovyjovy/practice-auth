@@ -1,4 +1,4 @@
-// セッションまわり(/me)の動作確認をまとめて実行するスクリプト。
+// セッションまわり(/me・/logout)の動作確認をまとめて実行するスクリプト。
 //
 // 使い方(リポジトリのルートで、サーバーを起動した状態で):
 //   node tools/check-session.ts          すぐ終わる確認だけ
@@ -17,11 +17,15 @@ const IDLE_S = Number(process.env.IDLE_S ?? 60);
 const COOKIE_NAME = "__Host-session";
 const slow = process.argv.includes("--slow");
 
-type Res = { status: number; text: string };
+type Res = { status: number; text: string; setCookies: string[] };
 
 // Cookie を覚えるクライアント。属性(Secure など)は req.ts と同じく無視する。
 class Client {
   #cookies = new Map<string, string>();
+
+  getCookie(name: string): string | undefined {
+    return this.#cookies.get(name);
+  }
 
   setCookie(name: string, value: string): void {
     this.#cookies.set(name, value);
@@ -41,7 +45,8 @@ class Client {
     });
 
     // Set-Cookie を反映する。値が空か Max-Age<=0 なら削除扱い。
-    for (const header of res.headers.getSetCookie()) {
+    const setCookies = res.headers.getSetCookie();
+    for (const header of setCookies) {
       const [pair = "", ...attrs] = header.split(";").map((s) => s.trim());
       const eq = pair.indexOf("=");
       if (eq <= 0) continue;
@@ -54,8 +59,19 @@ class Client {
 
     const text = await res.text();
     console.log(`    ${method} ${path} -> ${res.status} ${text}`);
-    return { status: res.status, text };
+    for (const sc of setCookies) console.log(`      set-cookie: ${sc}`);
+    return { status: res.status, text, setCookies };
   }
+}
+
+// __Host- の Cookie をブラウザが受け入れる条件(Secure あり・Path=/・Domain なし)を満たすか
+function satisfiesHostPrefix(setCookie: string): boolean {
+  const attrs = setCookie.split(";").slice(1).map((s) => s.trim().toLowerCase());
+  return (
+    attrs.includes("secure") &&
+    attrs.includes("path=/") &&
+    !attrs.some((a) => a.startsWith("domain="))
+  );
 }
 
 const failures: string[] = [];
@@ -107,6 +123,33 @@ const checks: Check[] = [
       const client = new Client();
       client.setCookie(COOKIE_NAME, randomBytes(32).toString("hex"));
       expectUnauthorized("401 が返る", await client.request("GET", "/me"));
+    },
+  },
+  {
+    name: "ログアウトしてから /me",
+    run: async () => {
+      const { client } = await loggedIn();
+      const res = await client.request("POST", "/logout");
+      expect("200 が返る", res.status, 200);
+      const deletion = res.setCookies.find((sc) => sc.startsWith(`${COOKIE_NAME}=`));
+      expect("Cookie を消す Set-Cookie がある", deletion !== undefined, true);
+      if (deletion !== undefined) {
+        expect("その Set-Cookie が __Host- の条件を満たす", satisfiesHostPrefix(deletion), true);
+      }
+      expect("手元の Cookie が消えている", client.getCookie(COOKIE_NAME), undefined);
+      expectUnauthorized("/me は 401", await client.request("GET", "/me"));
+    },
+  },
+  {
+    name: "ログアウト前にコピーしておいた ID で /me(盗まれた ID)",
+    run: async () => {
+      const { client } = await loggedIn();
+      const stolen = client.getCookie(COOKIE_NAME);
+      expect("ログイン後に Cookie がある", stolen !== undefined, true);
+      await client.request("POST", "/logout");
+      const attacker = new Client();
+      attacker.setCookie(COOKIE_NAME, stolen ?? "");
+      expectUnauthorized("コピーした ID でも 401", await attacker.request("GET", "/me"));
     },
   },
   {

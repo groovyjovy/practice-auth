@@ -185,21 +185,18 @@ app.post("login", async (c) => {
 // 4. アイドルタイムアウトを確認する: 今の時刻から lastAccessAt を引いた時間が、アイドルタイムアウトを超えていたら、同じく消してから 401 を返します。
 // 5. lastAccessAt を今の時刻に更新する
 // 6. ユーザー名を返す（例：JSON で { userName }）
-app.get("me", async (c) => {
+app.get("/me", async (c) => {
   const sessionId = getCookie(c, cookieName);
-
   if (!sessionId) {
     return c.text("Session not found.", 401)
   }
 
   const session = sessionMap.get(sessionId);
-
   if (!session) {
     return c.text("Session not found.", 401)
   }
 
   const now = Date.now();
-
   if (now > session.expireAt || (now - IDLE_TIMEOUT_MS) > session.lastAccessAt) {
     sessionMap.delete(sessionId);
     return c.text("Session not found.", 401)
@@ -210,6 +207,26 @@ app.get("me", async (c) => {
   sessionMap.set(sessionId, updated);
 
   return c.text(session.userName, 200);
+});
+
+// 1. Cookie からセッション ID を取り出す
+// 2. sessionMap から消す
+// 3. Max-Age=0 の Set-Cookie で、ブラウザに Cookie を消させる（__Host- の条件に注意）
+app.post("/logout", async (c) => {
+  const sessionId = getCookie(c, cookieName);
+  if (!sessionId) {
+    return c.text("Session not found.", 401)
+  }
+
+  const session = sessionMap.get(sessionId);
+  if (!session) {
+    return c.text("Session not found.", 401)
+  }
+
+  sessionMap.delete(sessionId);
+  c.header("Set-Cookie", `${cookieName}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`)
+
+  return c.text("logout", 200);
 });
 
 serve(
