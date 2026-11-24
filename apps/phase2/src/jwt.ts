@@ -52,7 +52,7 @@ const jsonParse = (str: string) => {
 // 確認: RFC 7515 付録 A.1 の例と同じ署名が出る
 //   - ヘッダーとペイロードは、RFC に載っている base64url 済みの文字列をそのまま使う(JSON に改行が入っているため)
 //   - 鍵は JWK の k(base64url)をバイト列に戻してから HMAC に渡す
-const generateJWT = (sub: string, key: NonSharedBuffer) => {
+export const generateJWT = (sub: string, key: NonSharedBuffer) => {
   const header = { alg: "HS256", typ: "JWT" };
   const headerStr = JSON.stringify(header);
   const headerStrBase64url = encodeBase64Url(headerStr);
@@ -71,8 +71,6 @@ const generateJWT = (sub: string, key: NonSharedBuffer) => {
   return `${signTarget}.${signature}`;
 };
 
-const hoge = generateJWT("hoge", key);
-
 // ===== ステップ 3: JWT を検証する =====
 // 1. "." で分ける。3 つでなければ失敗
 // 2. ヘッダーを JSON に戻し、alg が "HS256" であることを確認する
@@ -90,7 +88,7 @@ const hoge = generateJWT("hoge", key);
 
 type Result = { ok: true; value: unknown } | { ok: false; value: Error };
 
-const verifyJWT = (jwt: string): Result => {
+export const verifyJWT = (jwt: string, key: NonSharedBuffer): Result => {
   // -----------------
   // 1
   const splited = jwt.split(".");
@@ -166,5 +164,3 @@ const verifyJWT = (jwt: string): Result => {
   console.log({sub, iat, exp });
   return { ok: true, value: {sub, iat, exp } };
 };
-
-verifyJWT(hoge);
